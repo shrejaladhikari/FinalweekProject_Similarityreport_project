@@ -1,0 +1,231 @@
+Index: ../pythonProject/app.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import os  # Importing the OS module for file system operations\nimport re  # Importing regular expressions for text processing\nimport math  # Importing math for log-based computations\nimport numpy as np  # Importing NumPy for vector and matrix operations\nfrom collections import defaultdict  # Importing default dictionary for inverted index creation\nfrom flask import Flask, render_template, request  # Importing Flask for web application\n\napp = Flask(__name__)  # Initializing Flask app\n\n# In-memory dictionary to store replies for each document\nreplies = defaultdict(list)  # Keys: document IDs, Values: list of replies\n\n\n# 1. Loading documents from the specified folder\ndef load_documents(folder_path):\n    docs = {}\n    for filename in os.listdir(folder_path):  # Listing files in the folder\n        if filename.endswith('.txt'):  # Filtering to only text files\n            with open(os.path.join(folder_path, filename), 'r', encoding='utf-8') as file:\n                docs[filename] = file.read()  # Reading file content\n    return docs  # Returning loaded documents\n\n\n# 2. Preprocessing the text by tokenizing and lowercasing\ndef preprocess(text):\n    return re.findall(r'\\b\\w+\\b', text.lower())  # Tokenizing and lowercasing the text\n\n\n# 3. Creating an inverted index from the documents\ndef create_inverted_index(docs):\n    inverted_index = defaultdict(list)  # Creating a dictionary for the inverted index\n    for doc_id, content in docs.items():\n        words = preprocess(content)  # Preprocessing document content\n        for word in set(words):  # Using unique words\n            inverted_index[word].append(doc_id)  # Appending document ID to the word in index\n    return inverted_index  # Returning the inverted index\n\n\n# 4. Calculating term frequency (TF) for a given term in a document\ndef term_frequency(term, document):\n    if len(document) == 0:  # Preventing division by zero\n        return 0\n    return document.count(term) / len(document)  # Calculating the frequency of the term\n\n\n# 5. Calculating inverse document frequency (IDF) for a given term across documents\ndef inverse_document_frequency(term, all_documents):\n    num_docs_containing_term = sum(1 for doc in all_documents if term in doc)  # Counting documents containing the term\n    return math.log(len(all_documents) / (1 + num_docs_containing_term))  # Calculating IDF with smoothing\n\n\n# 6. Computing the TF-IDF vector for a document based on the vocabulary\ndef compute_tfidf(document, all_documents, vocab):\n    tfidf_vector = []\n    for term in vocab:  # Iterating through all terms in the vocabulary\n        tf = term_frequency(term, document)  # Calculating TF\n        idf = inverse_document_frequency(term, all_documents)  # Calculating IDF\n        tfidf_vector.append(tf * idf)  # Appending the TF-IDF score\n    return np.array(tfidf_vector)  # Returning TF-IDF vector as NumPy array\n\n\n# 7. Calculating cosine similarity between two TF-IDF vectors\ndef cosine_similarity(vec1, vec2):\n    dot_product = np.dot(vec1, vec2)  # Calculating dot product of vectors\n    norm_vec1 = np.linalg.norm(vec1)  # Calculating norm of the first vector\n    norm_vec2 = np.linalg.norm(vec2)  # Calculating norm of the second vector\n    return dot_product / (norm_vec1 * norm_vec2) if norm_vec1 and norm_vec2 else 0.0  # Calculating cosine similarity\n\n\n# 8. Retrieving and ranking documents based on cosine similarity with the query\ndef retrieve_documents(query, inverted_index, docs, vocab):\n    query_terms = preprocess(query)  # Preprocessing the query\n\n    if not query_terms:  # If query is empty, return no results\n        return []\n\n    # Step 1: Compute TF-IDF vector for the query\n    query_vector = compute_tfidf(query_terms, list(docs.values()), vocab)  # Vectorizing the query\n\n    similarities = {}  # Dictionary to store similarity scores\n\n    # Step 2: For each document, compute its TF-IDF vector and calculate similarity with query\n    for doc_id, content in docs.items():\n        doc_vector = compute_tfidf(preprocess(content), list(docs.values()), vocab)  # Vectorizing the document\n        similarity_score = cosine_similarity(query_vector, doc_vector)  # Computing cosine similarity\n\n        similarities[doc_id] = similarity_score  # Storing the similarity score\n\n    # Step 3: Rank the documents based on their similarity scores in descending order\n    ranked_docs = sorted(similarities.items(), key=lambda item: item[1], reverse=True)  # Sorting by similarity score\n\n    # Step 4: Return the ranked results (document ID and similarity score)\n    return ranked_docs\n\n\n# 9. Loading documents and building the inverted index\nfolder_path = '/Users/shrejaladhikari/Downloads/techsupport'  # Your folder path here\ndocs = load_documents(folder_path)  # Loading documents\ninverted_index = create_inverted_index(docs)  # Creating the inverted index\nvocab = sorted(set(term for doc in docs.values() for term in preprocess(doc)))  # Creating sorted vocabulary\n\n\n# 10. Rendering the index page\n@app.route('/')\ndef index():\n    return render_template('index.html')  # Rendering home page\n\n\n# 11. Handling the search and displaying results\n@app.route('/search', methods=['POST'])\ndef search():\n    query = request.form['query']  # Getting the query from the form submission\n    results = retrieve_documents(query, inverted_index, docs, vocab)  # Retrieving ranked results\n    return render_template('results.html', query=query, results=results, docs=docs, replies=replies)  # Passing docs, results, and replies\n\n\n# 12. Route to handle adding replies to search results\n@app.route('/add_reply', methods=['POST'])\ndef add_reply():\n    doc_id = request.form['doc_id']  # Get document ID from the form\n    reply = request.form['reply']  # Get the user's reply from the form\n    if reply:\n        replies[doc_id].append(reply)  # Add the reply to the list for the corresponding doc_id\n    return render_template('results.html', query=request.form['query'], results=retrieve_documents(request.form['query'], inverted_index, docs, vocab), docs=docs, replies=replies)\n\n\n# Custom filter to highlight query terms\ndef highlight_query(text, query):\n    query_terms = re.escape(query)  # Escape special characters in query terms\n    highlighted_text = re.sub(f'({query_terms})', r'<mark>\\1</mark>', text, flags=re.IGNORECASE)\n    return highlighted_text\n\n\n# Register the custom filter with Jinja\napp.jinja_env.filters['highlight'] = highlight_query\n\n\n# 13. Running the Flask app\nif __name__ == '__main__':\n    app.run(debug=True)  # Starting the Flask development server\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/../pythonProject/app.py b/../pythonProject/app.py
+--- a/../pythonProject/app.py	(revision 8ed088e0977e4cb99eb533867b323b16d1c6cba9)
++++ b/../pythonProject/app.py	(date 1727834219765)
+@@ -10,7 +10,6 @@
+ # In-memory dictionary to store replies for each document
+ replies = defaultdict(list)  # Keys: document IDs, Values: list of replies
+ 
+-
+ # 1. Loading documents from the specified folder
+ def load_documents(folder_path):
+     docs = {}
+@@ -20,13 +19,19 @@
+                 docs[filename] = file.read()  # Reading file content
+     return docs  # Returning loaded documents
+ 
++# 2. Loading queries from the specified file
++def load_queries(query_file_path):
++    queries = []
++    with open(query_file_path, 'r', encoding='utf-8') as file:
++        for line in file:
++            queries.append(line.strip())  # Reading each query and stripping extra spaces/newlines
++    return queries
+ 
+-# 2. Preprocessing the text by tokenizing and lowercasing
++# 3. Preprocessing the text by tokenizing and lowercasing
+ def preprocess(text):
+     return re.findall(r'\b\w+\b', text.lower())  # Tokenizing and lowercasing the text
+ 
+-
+-# 3. Creating an inverted index from the documents
++# 4. Creating an inverted index from the documents
+ def create_inverted_index(docs):
+     inverted_index = defaultdict(list)  # Creating a dictionary for the inverted index
+     for doc_id, content in docs.items():
+@@ -35,21 +40,18 @@
+             inverted_index[word].append(doc_id)  # Appending document ID to the word in index
+     return inverted_index  # Returning the inverted index
+ 
+-
+-# 4. Calculating term frequency (TF) for a given term in a document
++# 5. Calculating term frequency (TF) for a given term in a document
+ def term_frequency(term, document):
+     if len(document) == 0:  # Preventing division by zero
+         return 0
+     return document.count(term) / len(document)  # Calculating the frequency of the term
+ 
+-
+-# 5. Calculating inverse document frequency (IDF) for a given term across documents
++# 6. Calculating inverse document frequency (IDF) for a given term across documents
+ def inverse_document_frequency(term, all_documents):
+     num_docs_containing_term = sum(1 for doc in all_documents if term in doc)  # Counting documents containing the term
+     return math.log(len(all_documents) / (1 + num_docs_containing_term))  # Calculating IDF with smoothing
+ 
+-
+-# 6. Computing the TF-IDF vector for a document based on the vocabulary
++# 7. Computing the TF-IDF vector for a document based on the vocabulary
+ def compute_tfidf(document, all_documents, vocab):
+     tfidf_vector = []
+     for term in vocab:  # Iterating through all terms in the vocabulary
+@@ -58,16 +60,14 @@
+         tfidf_vector.append(tf * idf)  # Appending the TF-IDF score
+     return np.array(tfidf_vector)  # Returning TF-IDF vector as NumPy array
+ 
+-
+-# 7. Calculating cosine similarity between two TF-IDF vectors
++# 8. Calculating cosine similarity between two TF-IDF vectors
+ def cosine_similarity(vec1, vec2):
+     dot_product = np.dot(vec1, vec2)  # Calculating dot product of vectors
+     norm_vec1 = np.linalg.norm(vec1)  # Calculating norm of the first vector
+     norm_vec2 = np.linalg.norm(vec2)  # Calculating norm of the second vector
+     return dot_product / (norm_vec1 * norm_vec2) if norm_vec1 and norm_vec2 else 0.0  # Calculating cosine similarity
+ 
+-
+-# 8. Retrieving and ranking documents based on cosine similarity with the query
++# 9. Retrieving and ranking documents based on cosine similarity with the query
+ def retrieve_documents(query, inverted_index, docs, vocab):
+     query_terms = preprocess(query)  # Preprocessing the query
+ 
+@@ -92,29 +92,29 @@
+     # Step 4: Return the ranked results (document ID and similarity score)
+     return ranked_docs
+ 
+-
+-# 9. Loading documents and building the inverted index
++# 10. Loading documents and building the inverted index
+ folder_path = '/Users/shrejaladhikari/Downloads/techsupport'  # Your folder path here
+ docs = load_documents(folder_path)  # Loading documents
+ inverted_index = create_inverted_index(docs)  # Creating the inverted index
+ vocab = sorted(set(term for doc in docs.values() for term in preprocess(doc)))  # Creating sorted vocabulary
+ 
++# 11. Loading queries
++query_file_path = '/Users/shrejaladhikari/Downloads/queries.txt'  # Path to the query file
++queries = load_queries(query_file_path)  # Loading the queries
+ 
+-# 10. Rendering the index page
++# 12. Rendering the index page
+ @app.route('/')
+ def index():
+     return render_template('index.html')  # Rendering home page
+ 
+-
+-# 11. Handling the search and displaying results
++# 13. Handling the search and displaying results
+ @app.route('/search', methods=['POST'])
+ def search():
+     query = request.form['query']  # Getting the query from the form submission
+     results = retrieve_documents(query, inverted_index, docs, vocab)  # Retrieving ranked results
+     return render_template('results.html', query=query, results=results, docs=docs, replies=replies)  # Passing docs, results, and replies
+ 
+-
+-# 12. Route to handle adding replies to search results
++# 14. Route to handle adding replies to search results
+ @app.route('/add_reply', methods=['POST'])
+ def add_reply():
+     doc_id = request.form['doc_id']  # Get document ID from the form
+@@ -123,18 +123,15 @@
+         replies[doc_id].append(reply)  # Add the reply to the list for the corresponding doc_id
+     return render_template('results.html', query=request.form['query'], results=retrieve_documents(request.form['query'], inverted_index, docs, vocab), docs=docs, replies=replies)
+ 
+-
+ # Custom filter to highlight query terms
+ def highlight_query(text, query):
+     query_terms = re.escape(query)  # Escape special characters in query terms
+     highlighted_text = re.sub(f'({query_terms})', r'<mark>\1</mark>', text, flags=re.IGNORECASE)
+     return highlighted_text
+ 
+-
+ # Register the custom filter with Jinja
+ app.jinja_env.filters['highlight'] = highlight_query
+ 
+-
+-# 13. Running the Flask app
++# 15. Running the Flask app
+ if __name__ == '__main__':
+     app.run(debug=True)  # Starting the Flask development server
+Index: ../pythonProject/templates/results.html
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Search Results - InteliSearch</title>\n    <style>\n        body {\n            font-family: Arial, sans-serif;\n            background-color: #f4f4f9;\n            margin: 0;\n            padding: 20px;\n        }\n        h1 {\n            color: #0056b3;\n        }\n        .results-container {\n            margin-top: 30px;\n        }\n        .result-item {\n            background-color: white;\n            padding: 15px;\n            margin-bottom: 10px;\n            border: 1px solid #ddd;\n        }\n        .result-item h3 {\n            margin: 0;\n            color: #0056b3;\n        }\n        .result-item p {\n            margin: 5px 0;\n        }\n        .similarity-score {\n            font-size: 0.9em;\n            color: #777;\n        }\n        .no-results {\n            color: #777;\n            text-align: center;\n            margin-top: 50px;\n        }\n        mark {\n            background-color: yellow;\n            font-weight: bold;\n        }\n        .reply-section {\n            margin-top: 15px;\n            background-color: #f0f0f0;\n            padding: 15px;\n            border-radius: 5px;\n        }\n        input[type=\"text\"] {\n            width: 80%;\n            padding: 10px;\n            font-size: 16px;\n            margin-right: 10px;\n        }\n        button {\n            padding: 10px 20px;\n            font-size: 16px;\n            background-color: #0056b3;\n            color: white;\n            border: none;\n            cursor: pointer;\n        }\n        button:hover {\n            background-color: #003f7f;\n        }\n        .replies {\n            margin-top: 10px;\n        }\n        .replies h4 {\n            margin: 0 0 5px 0;\n            font-size: 1.1em;\n            color: #0056b3;\n        }\n        .reply-item {\n            padding: 10px;\n            border: 1px solid #ddd;\n            background-color: #fff;\n            margin-bottom: 5px;\n        }\n    </style>\n</head>\n<body>\n    <h1>Search Results for \"{{ query }}\"</h1>\n    <div class=\"results-container\">\n        {% if query and results %}\n            {% for doc_id, similarity in results %}\n                <div class=\"result-item\">\n                    <h3>{{ doc_id }}</h3>\n                    <p class=\"similarity-score\">Similarity: {{ \"%.2f\"|format(similarity * 100) }}%</p>\n\n                    {# Highlighting query terms in the document #}\n                    <p>{{ docs[doc_id] | highlight(query) | safe }}</p>\n\n                    {# Reply section #}\n                    <div class=\"reply-section\">\n                        <form action=\"/add_reply\" method=\"POST\">\n                            <input type=\"hidden\" name=\"doc_id\" value=\"{{ doc_id }}\">\n                            <input type=\"hidden\" name=\"query\" value=\"{{ query }}\">\n                            <input type=\"text\" name=\"reply\" placeholder=\"Write a reply...\" required>\n                            <button type=\"submit\">Submit Reply</button>\n                        </form>\n                    </div>\n\n                    {# Displaying existing replies #}\n                    <div class=\"replies\">\n                        <h4>Replies:</h4>\n                        {% if replies[doc_id] %}\n                            {% for reply in replies[doc_id] %}\n                                <div class=\"reply-item\">\n                                    {{ reply }}\n                                </div>\n                            {% endfor %}\n                        {% else %}\n                            <p>No replies yet. Be the first to reply!</p>\n                        {% endif %}\n                    </div>\n                </div>\n            {% endfor %}\n        {% elif query %}\n            <div class=\"no-results\">\n                <p>No results found for your query.</p>\n            </div>\n        {% else %}\n            <div class=\"no-results\">\n                <p>Please enter a search query.</p>\n            </div>\n        {% endif %}\n    </div>\n</body>\n</html>\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/../pythonProject/templates/results.html b/../pythonProject/templates/results.html
+--- a/../pythonProject/templates/results.html	(revision 8ed088e0977e4cb99eb533867b323b16d1c6cba9)
++++ b/../pythonProject/templates/results.html	(date 1727847561586)
+@@ -43,43 +43,6 @@
+             background-color: yellow;
+             font-weight: bold;
+         }
+-        .reply-section {
+-            margin-top: 15px;
+-            background-color: #f0f0f0;
+-            padding: 15px;
+-            border-radius: 5px;
+-        }
+-        input[type="text"] {
+-            width: 80%;
+-            padding: 10px;
+-            font-size: 16px;
+-            margin-right: 10px;
+-        }
+-        button {
+-            padding: 10px 20px;
+-            font-size: 16px;
+-            background-color: #0056b3;
+-            color: white;
+-            border: none;
+-            cursor: pointer;
+-        }
+-        button:hover {
+-            background-color: #003f7f;
+-        }
+-        .replies {
+-            margin-top: 10px;
+-        }
+-        .replies h4 {
+-            margin: 0 0 5px 0;
+-            font-size: 1.1em;
+-            color: #0056b3;
+-        }
+-        .reply-item {
+-            padding: 10px;
+-            border: 1px solid #ddd;
+-            background-color: #fff;
+-            margin-bottom: 5px;
+-        }
+     </style>
+ </head>
+ <body>
+@@ -91,32 +54,7 @@
+                     <h3>{{ doc_id }}</h3>
+                     <p class="similarity-score">Similarity: {{ "%.2f"|format(similarity * 100) }}%</p>
+ 
+-                    {# Highlighting query terms in the document #}
+                     <p>{{ docs[doc_id] | highlight(query) | safe }}</p>
+-
+-                    {# Reply section #}
+-                    <div class="reply-section">
+-                        <form action="/add_reply" method="POST">
+-                            <input type="hidden" name="doc_id" value="{{ doc_id }}">
+-                            <input type="hidden" name="query" value="{{ query }}">
+-                            <input type="text" name="reply" placeholder="Write a reply..." required>
+-                            <button type="submit">Submit Reply</button>
+-                        </form>
+-                    </div>
+-
+-                    {# Displaying existing replies #}
+-                    <div class="replies">
+-                        <h4>Replies:</h4>
+-                        {% if replies[doc_id] %}
+-                            {% for reply in replies[doc_id] %}
+-                                <div class="reply-item">
+-                                    {{ reply }}
+-                                </div>
+-                            {% endfor %}
+-                        {% else %}
+-                            <p>No replies yet. Be the first to reply!</p>
+-                        {% endif %}
+-                    </div>
+                 </div>
+             {% endfor %}
+         {% elif query %}
+diff --git a/../pythonProject1/app.py b/../pythonProject1/app.py
+new file mode 100644
